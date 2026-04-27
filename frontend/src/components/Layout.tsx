@@ -397,7 +397,12 @@ function UserMenu() {
             leading={<LogOut className="w-4 h-4 text-slate-500" />}
             onSelect={() => {
               close();
-              // Sign-out is handled by Pomerium upstream; nothing to do client-side.
+              // Pomerium owns the session — clearing requires a round-trip
+              // to its sign-out endpoint. After it clears the cookie it
+              // bounces us back to "/", where the next request 401s and
+              // Pomerium re-prompts SSO.
+              const redirectUri = encodeURIComponent(window.location.origin + '/');
+              window.location.href = `/.pomerium/sign_out?pomerium_redirect_uri=${redirectUri}`;
             }}
           >
             Sign out
