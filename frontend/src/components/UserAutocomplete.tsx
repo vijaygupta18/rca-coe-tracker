@@ -11,6 +11,8 @@ interface UserAutocompleteProps {
   onChange: (users: User[]) => void;
   placeholder?: string;
   max?: number;
+  /** Single-pick mode: hide the input entirely once one user is picked. */
+  single?: boolean;
 }
 
 const DEFAULT_MAX = 10;
@@ -29,6 +31,7 @@ export default function UserAutocomplete({
   onChange,
   placeholder = 'Add people…',
   max = DEFAULT_MAX,
+  single = false,
 }: UserAutocompleteProps) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -36,6 +39,8 @@ export default function UserAutocomplete({
   const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const atMax = value.length >= max;
+  // In single-pick mode, the input is hidden entirely once a user is picked.
+  const hideInput = single && atMax;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -81,8 +86,10 @@ export default function UserAutocomplete({
       if (dropdownRef.current?.contains(t)) return;
       setOpen(false);
     };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
+    // Capture phase so we see the event before Modal's stopPropagation on
+    // content mousedown — otherwise clicks inside the modal don't reach us.
+    document.addEventListener('mousedown', onMouseDown, true);
+    return () => document.removeEventListener('mousedown', onMouseDown, true);
   }, [open]);
 
   useEffect(() => {
@@ -95,7 +102,10 @@ export default function UserAutocomplete({
     onChange([...value, u]);
     setQ('');
     setHighlight(0);
-    inputRef.current?.focus();
+    // Close after pick so the dropdown doesn't block the rest of the form.
+    // The user can click the input again to re-open.
+    setOpen(false);
+    inputRef.current?.blur();
   };
 
   const removeUser = (email: string) => {
@@ -128,50 +138,55 @@ export default function UserAutocomplete({
     <div ref={containerRef} className="w-full">
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
-          {value.map((u) => (
-            <span
-              key={u.email}
-              className="inline-flex items-center gap-1.5 pl-1 pr-1.5 py-0.5 bg-slate-100 rounded-full text-xs font-medium text-slate-700"
-            >
-              <Avatar name={u.name} size="xs" />
-              <span className="ml-0.5">{u.name}</span>
-              <button
-                type="button"
-                onClick={() => removeUser(u.email)}
-                className="ml-0.5 p-0.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
-                aria-label={`Remove ${u.name}`}
+          {value.map((u) => {
+            const displayName = u.name || u.email.split('@')[0] || u.email;
+            return (
+              <span
+                key={u.email}
+                className="inline-flex items-center gap-1.5 pl-1 pr-1.5 py-0.5 bg-slate-100 rounded-full text-xs font-medium text-slate-700"
               >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          ))}
+                <Avatar name={displayName} size="xs" />
+                <span className="ml-0.5">{displayName}</span>
+                <button
+                  type="button"
+                  onClick={() => removeUser(u.email)}
+                  className="ml-0.5 p-0.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
+                  aria-label={`Remove ${displayName}`}
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
 
-      <div className="relative">
-        <input
-          ref={inputRef}
-          type="text"
-          value={q}
-          placeholder={atMax ? `Maximum ${max} reached — remove someone to add another` : placeholder}
-          disabled={atMax}
-          onFocus={() => !atMax && setOpen(true)}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setOpen(true);
-          }}
-          onKeyDown={onKeyDown}
-          className={`soft-focus w-full px-3 py-2 rounded-lg border text-sm focus:outline-none ${
-            atMax
-              ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
-              : 'border-slate-300 focus:border-blue-400'
-          }`}
-        />
-        {isFetching && open && !atMax && (
-          <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 animate-spin" />
-        )}
-      </div>
-      {value.length > 0 && (
+      {!hideInput && (
+        <div className="relative">
+          <input
+            ref={inputRef}
+            type="text"
+            value={q}
+            placeholder={atMax ? `Maximum ${max} reached — remove someone to add another` : placeholder}
+            disabled={atMax}
+            onFocus={() => !atMax && setOpen(true)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setOpen(true);
+            }}
+            onKeyDown={onKeyDown}
+            className={`soft-focus w-full px-3 py-2 rounded-lg border text-sm focus:outline-none ${
+              atMax
+                ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+                : 'border-slate-300 focus:border-blue-400'
+            }`}
+          />
+          {isFetching && open && !atMax && (
+            <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 animate-spin" />
+          )}
+        </div>
+      )}
+      {!single && value.length > 0 && (
         <p className="text-[11px] text-slate-400 mt-1 tabular-nums">
           {value.length} of {max} assignees{atMax ? ' · maximum reached' : ''}
         </p>
@@ -190,26 +205,29 @@ export default function UserAutocomplete({
                   {debouncedQ ? 'No matches' : 'Start typing to search…'}
                 </div>
               ) : (
-                options.map((u, i) => (
-                  <button
-                    key={u.email}
-                    type="button"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      addUser(u);
-                    }}
-                    onMouseEnter={() => setHighlight(i)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
-                      i === highlight ? 'bg-blue-50' : 'hover:bg-slate-50'
-                    }`}
-                  >
-                    <Avatar name={u.name} size="sm" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-900 truncate">{u.name}</p>
-                      <p className="text-[12px] text-slate-400 truncate">{u.email}</p>
-                    </div>
-                  </button>
-                ))
+                options.map((u, i) => {
+                  const displayName = u.name || u.email.split('@')[0] || u.email;
+                  return (
+                    <button
+                      key={u.email}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        addUser(u);
+                      }}
+                      onMouseEnter={() => setHighlight(i)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+                        i === highlight ? 'bg-blue-50' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <Avatar name={displayName} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-900 truncate">{displayName}</p>
+                        <p className="text-[12px] text-slate-400 truncate">{u.email}</p>
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>,

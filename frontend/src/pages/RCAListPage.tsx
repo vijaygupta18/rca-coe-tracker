@@ -21,9 +21,11 @@ import DateRangeFilter from '../components/DateRangeFilter';
 import StatusBadge from '../components/StatusBadge';
 import SeverityIcon from '../components/SeverityIcon';
 import { AvatarStack } from '../components/Avatar';
+import TrendsBar from '../components/TrendsBar';
+import FollowUpsTable from '../components/FollowUpsTable';
 import { isStaleRCA, statusLabels, timeAgo } from '../utils/format';
 
-type Filter = 'all' | 'mine' | RCAStatus;
+type Filter = 'all' | 'mine' | 'followups' | RCAStatus;
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -32,7 +34,10 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'in_progress', label: statusLabels.in_progress },
   { id: 'rca_done', label: statusLabels.rca_done },
   { id: 'closed', label: statusLabels.closed },
+  { id: 'followups', label: 'Follow-ups' },
 ];
+
+const TRENDS_KEY = 'rca-list-show-trends';
 
 const SEVERITY_OPTIONS: { id: '' | RCASeverity; label: string }[] = [
   { id: '', label: 'All severities' },
@@ -111,7 +116,7 @@ function RCARow({ rca, idx }: { rca: RCA; idx: number }) {
       onClick={open}
       onKeyDown={onKeyDown}
       style={{ animationDelay: `${Math.min(idx, 12) * 24}ms` }}
-      className="group grid grid-cols-[auto_1fr_140px_140px_140px] items-center gap-4 px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50/80 cursor-pointer transition-colors animate-stagger-in focus:outline-none focus:bg-blue-50/40"
+      className="group grid grid-cols-[auto_1fr_140px_120px_120px_120px] items-center gap-4 px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50/80 cursor-pointer transition-colors animate-stagger-in focus:outline-none focus:bg-blue-50/40"
     >
       {/* Severity */}
       <div className="shrink-0 w-14">
@@ -141,10 +146,15 @@ function RCARow({ rca, idx }: { rca: RCA; idx: number }) {
         <StatusBadge status={rca.status} />
       </div>
 
+      {/* Env */}
+      <div className="shrink-0 text-[11.5px] text-slate-500 truncate" title={rca.environment ?? undefined}>
+        {rca.environment || <span className="text-slate-300 italic">—</span>}
+      </div>
+
       {/* Assignees */}
       <div className="shrink-0">
         {rca.assignees.length > 0 ? (
-          <AvatarStack names={rca.assignees.map((a) => a.name)} max={3} size="xs" />
+          <AvatarStack names={rca.assignees.map((a) => a.name || a.email)} max={3} size="xs" />
         ) : (
           <span className="text-[11.5px] text-slate-300 italic">unassigned</span>
         )}
@@ -174,6 +184,7 @@ export default function RCAListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const statusParam = (searchParams.get('status') as RCAStatus) || '';
   const mineParam = searchParams.get('mine') === '1';
+  const followupsParam = searchParams.get('followups') === '1';
   const qParam = searchParams.get('q') || '';
   const severityParamRaw = (searchParams.get('severity') || '').toLowerCase();
   const severityParam: RCASeverity | '' =
@@ -183,7 +194,23 @@ export default function RCAListPage() {
   const fromParam = searchParams.get('from') || '';
   const toParam = searchParams.get('to') || '';
 
-  const activeFilter: Filter = mineParam ? 'mine' : statusParam ? (statusParam as Filter) : 'all';
+  const activeFilter: Filter = followupsParam
+    ? 'followups'
+    : mineParam
+    ? 'mine'
+    : statusParam
+    ? (statusParam as Filter)
+    : 'all';
+
+  const [showTrends, setShowTrends] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem(TRENDS_KEY) !== '0';
+  });
+
+  const dismissTrends = () => {
+    setShowTrends(false);
+    if (typeof window !== 'undefined') window.localStorage.setItem(TRENDS_KEY, '0');
+  };
 
   const [search, setSearch] = useState(qParam);
   const debouncedSearch = useDebounced(search, 250);
@@ -217,7 +244,9 @@ export default function RCAListPage() {
     const next = new URLSearchParams(searchParams);
     next.delete('status');
     next.delete('mine');
+    next.delete('followups');
     if (f === 'mine') next.set('mine', '1');
+    else if (f === 'followups') next.set('followups', '1');
     else if (f !== 'all') next.set('status', f);
     setSearchParams(next);
   };
@@ -249,6 +278,18 @@ export default function RCAListPage() {
         from: fromParam || undefined,
         to: toParam || undefined,
       }),
+    enabled: !followupsParam,
+  });
+
+  // Follow-ups tab loads everything page-size-large so we can flatten action items.
+  const { data: followupsData, isLoading: followupsLoading } = useQuery({
+    queryKey: ['rcas-followups', debouncedSearch],
+    queryFn: () =>
+      fetchRCAs({
+        page_size: 200,
+        q: debouncedSearch || undefined,
+      }),
+    enabled: followupsParam,
   });
 
   const items = data?.items ?? [];
@@ -256,6 +297,13 @@ export default function RCAListPage() {
     () => activeFilter !== 'all' || !!debouncedSearch || !!severityParam || !!fromParam || !!toParam,
     [activeFilter, debouncedSearch, severityParam, fromParam, toParam],
   );
+  const totalLabel = followupsParam
+    ? followupsData
+      ? `${followupsData.items.length} ${followupsData.items.length === 1 ? 'RCA' : 'RCAs'} scanned`
+      : ''
+    : data
+    ? `${data.total} ${data.total === 1 ? 'RCA' : 'RCAs'}`
+    : '';
 
   const clear = () => {
     setSearch('');
@@ -286,20 +334,27 @@ export default function RCAListPage() {
       {/* Filter chips + search + view toggle */}
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <div className="flex flex-wrap items-center gap-1.5">
-          {FILTERS.map((f) => {
+          {FILTERS.map((f, i) => {
             const isActive = activeFilter === f.id;
+            // Visual divider before "Follow-ups" since it switches view, not filter.
+            const isFollowUps = f.id === 'followups';
+            const prevIsRegular = i > 0 && FILTERS[i - 1].id !== 'followups';
             return (
-              <button
-                key={f.id}
-                onClick={() => setFilter(f.id)}
-                className={`px-3 py-1.5 rounded-full text-[13px] font-medium transition-all duration-150 active:scale-[0.97] ${
-                  isActive
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-                }`}
-              >
-                {f.label}
-              </button>
+              <span key={f.id} className="inline-flex items-center gap-1.5">
+                {isFollowUps && prevIsRegular && (
+                  <span aria-hidden className="hidden sm:inline-block h-4 w-px bg-slate-200 mx-1" />
+                )}
+                <button
+                  onClick={() => setFilter(f.id)}
+                  className={`px-3 py-1.5 rounded-full text-[13px] font-medium transition-all duration-150 active:scale-[0.97] ${
+                    isActive
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              </span>
             );
           })}
         </div>
@@ -335,9 +390,9 @@ export default function RCAListPage() {
             </div>
           </div>
 
-          {/* View toggle */}
+          {/* View toggle — only meaningful for the RCA list, hide on Follow-ups. */}
           <div
-            className="hidden sm:inline-flex items-center bg-slate-100 rounded-lg p-0.5"
+            className={`${followupsParam ? 'hidden' : 'hidden sm:inline-flex'} items-center bg-slate-100 rounded-lg p-0.5`}
             role="group"
             aria-label="View mode"
           >
@@ -371,71 +426,106 @@ export default function RCAListPage() {
         </div>
       </div>
 
+      {/* Trends summary */}
+      {showTrends && (data?.items || followupsData?.items) && (
+        <TrendsBar
+          rcas={(followupsData?.items ?? data?.items) || []}
+          onDismiss={dismissTrends}
+        />
+      )}
+
       {/* Sub-filters */}
       <div className="flex flex-wrap items-center gap-2 mb-5">
-        <Dropdown
-          width={200}
-          trigger={
-            <button
-              type="button"
-              className="inline-flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-sm bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all duration-150 min-w-[180px]"
-            >
-              <span className="inline-flex items-center gap-1.5">
-                {severityParam && (
-                  <span className={`w-1.5 h-1.5 rounded-full ${SEV_DOT[severityParam as RCASeverity]}`} />
-                )}
-                {severityLabel}
-              </span>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-            </button>
-          }
-        >
-          {(close) => (
-            <>
-              {SEVERITY_OPTIONS.map((o) => (
-                <DropdownItem
-                  key={o.id || 'all'}
-                  selected={severityParam === o.id}
-                  leading={o.id ? <span className={`w-1.5 h-1.5 rounded-full ${SEV_DOT[o.id]}`} /> : null}
-                  onSelect={() => {
-                    setSeverity(o.id);
-                    close();
-                  }}
+        {!followupsParam && (
+          <>
+            <Dropdown
+              width={200}
+              trigger={
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-sm bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all duration-150 min-w-[180px]"
                 >
-                  {o.label}
-                </DropdownItem>
-              ))}
-            </>
-          )}
-        </Dropdown>
+                  <span className="inline-flex items-center gap-1.5">
+                    {severityParam && (
+                      <span className={`w-1.5 h-1.5 rounded-full ${SEV_DOT[severityParam as RCASeverity]}`} />
+                    )}
+                    {severityLabel}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                </button>
+              }
+            >
+              {(close) => (
+                <>
+                  {SEVERITY_OPTIONS.map((o) => (
+                    <DropdownItem
+                      key={o.id || 'all'}
+                      selected={severityParam === o.id}
+                      leading={o.id ? <span className={`w-1.5 h-1.5 rounded-full ${SEV_DOT[o.id]}`} /> : null}
+                      onSelect={() => {
+                        setSeverity(o.id);
+                        close();
+                      }}
+                    >
+                      {o.label}
+                    </DropdownItem>
+                  ))}
+                </>
+              )}
+            </Dropdown>
 
-        {severityParam && (
+            {severityParam && (
+              <button
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete('severity');
+                  setSearchParams(next);
+                }}
+                className="text-[12px] text-slate-500 hover:text-slate-700 inline-flex items-center gap-1 transition-colors"
+              >
+                <X className="w-3 h-3" />
+                Clear
+              </button>
+            )}
+
+            <DateRangeFilter
+              from={fromParam || null}
+              to={toParam || null}
+              onChange={setRange}
+            />
+          </>
+        )}
+
+        {!showTrends && (
           <button
+            type="button"
             onClick={() => {
-              const next = new URLSearchParams(searchParams);
-              next.delete('severity');
-              setSearchParams(next);
+              setShowTrends(true);
+              if (typeof window !== 'undefined') window.localStorage.removeItem(TRENDS_KEY);
             }}
-            className="text-[12px] text-slate-500 hover:text-slate-700 inline-flex items-center gap-1 transition-colors"
+            className="text-[12px] text-slate-500 hover:text-slate-700 transition-colors"
           >
-            <X className="w-3 h-3" />
-            Clear
+            Show trends
           </button>
         )}
 
-        <DateRangeFilter
-          from={fromParam || null}
-          to={toParam || null}
-          onChange={setRange}
-        />
-
         <span className="ml-auto text-[12px] text-slate-400 tabular-nums">
-          {data ? `${data.total} ${data.total === 1 ? 'RCA' : 'RCAs'}` : ''}
+          {totalLabel}
         </span>
       </div>
 
       {/* Body */}
-      {isLoading ? (
+      {followupsParam ? (
+        followupsLoading ? (
+          <div className="bg-white rounded-2xl ring-1 ring-slate-200/60 overflow-hidden">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <RowSkeleton key={i} />
+            ))}
+          </div>
+        ) : (
+          <FollowUpsTable rcas={followupsData?.items ?? []} />
+        )
+      ) : isLoading ? (
         view === 'list' ? (
           <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
             {Array.from({ length: 6 }).map((_, i) => (

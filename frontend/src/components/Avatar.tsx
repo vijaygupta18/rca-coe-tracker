@@ -33,13 +33,15 @@ const sizeMap = {
 };
 
 export default function Avatar({ name, size = 'sm', className = '' }: AvatarProps) {
-  const colorIndex = hashName(name) % AVATAR_COLORS.length;
+  const safeName = name && name.trim() ? name : '?';
+  const colorIndex = hashName(safeName) % AVATAR_COLORS.length;
   const gradient = AVATAR_COLORS[colorIndex];
-  const initial = name.charAt(0).toUpperCase();
+  const initial = safeName.trim().charAt(0).toUpperCase() || '?';
 
   return (
     <div
       className={`rounded-full bg-gradient-to-br ${gradient} flex items-center justify-center font-semibold text-white shrink-0 ${sizeMap[size]} ${className}`}
+      aria-hidden
     >
       {initial}
     </div>

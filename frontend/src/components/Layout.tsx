@@ -112,7 +112,7 @@ function GroupHeader({ children, collapsed }: { children: React.ReactNode; colla
 function RecentRCAs({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['sidebar-recent'],
-    queryFn: () => fetchRCAs({ page_size: 5 }),
+    queryFn: () => fetchRCAs({ page_size: 4 }),
     staleTime: 60_000,
   });
 
@@ -126,7 +126,7 @@ function RecentRCAs({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?
       </div>
     );
   }
-  const items = data?.items?.slice(0, 5) ?? [];
+  const items = data?.items?.slice(0, 4) ?? [];
   if (items.length === 0) {
     return <p className="text-[12px] text-slate-400 px-3 italic">No recent RCAs</p>;
   }

@@ -24,7 +24,7 @@ type ActionStatus = (typeof ACTION_STATUSES)[number];
 interface ActionItemRow {
   action: string;
   status: ActionStatus;
-  owner: string;
+  owner: User | null;
 }
 
 interface TimelineRow {
@@ -40,7 +40,7 @@ const ACTION_CATEGORIES = [
 ] as const;
 type ActionCategory = (typeof ACTION_CATEGORIES)[number];
 
-const emptyActionRow = (): ActionItemRow => ({ action: '', status: 'Open', owner: '' });
+const emptyActionRow = (): ActionItemRow => ({ action: '', status: 'Open', owner: null });
 const emptyTimelineRow = (): TimelineRow => ({ time: '', event: '' });
 
 const ACTION_TIP = '_Tip: file each item as an Argus issue and paste the link in the action column._';
@@ -104,7 +104,7 @@ function isMeaningful(d: DraftShape): boolean {
   if (d.services.length || d.assignees.length) return true;
   if (d.timeline.some((r) => r.time.trim() || r.event.trim())) return true;
   for (const cat of ACTION_CATEGORIES) {
-    if (d.actions[cat]?.some((r) => r.action.trim() || r.owner.trim())) return true;
+    if (d.actions[cat]?.some((r) => r.action.trim() || r.owner)) return true;
   }
   return false;
 }
@@ -149,7 +149,7 @@ function composeBody(parts: {
   const actionCategoryBlocks: string[] = [];
   for (const cat of ACTION_CATEGORIES) {
     const rows = parts.actions[cat].filter(
-      (r) => r.action.trim() || r.owner.trim(),
+      (r) => r.action.trim() || r.owner,
     );
     if (rows.length === 0) continue;
     const lines: string[] = [];
@@ -158,7 +158,8 @@ function composeBody(parts: {
     lines.push('| Action Item | Status | Owner |');
     lines.push('|---|---|---|');
     for (const r of rows) {
-      lines.push(`| ${r.action.trim()} | ${r.status} | ${r.owner.trim()} |`);
+      const ownerText = r.owner ? r.owner.name : '';
+      lines.push(`| ${r.action.trim()} | ${r.status} | ${ownerText} |`);
     }
     lines.push('');
     lines.push(ACTION_TIP);
@@ -275,7 +276,18 @@ export default function CreateRCAModal({ open, onClose }: CreateRCAModalProps) {
       setWentWell(d.wentWell || '');
       setCouldBeBetter(d.couldBeBetter || '');
       setGotLucky(d.gotLucky || '');
-      if (d.actions) setActions(d.actions);
+      if (d.actions) {
+        const migrated = Object.fromEntries(
+          Object.entries(d.actions).map(([k, rows]) => [
+            k,
+            (rows as ActionItemRow[]).map((r) => ({
+              ...r,
+              owner: r.owner && typeof r.owner === 'object' ? r.owner : null,
+            })),
+          ]),
+        ) as Record<ActionCategory, ActionItemRow[]>;
+        setActions(migrated);
+      }
       if (d.timeline?.length) setTimeline(d.timeline);
       setOverrideBody(d.overrideBody ?? null);
       setOverrideOpen(d.overrideBody !== null);
@@ -464,7 +476,7 @@ export default function CreateRCAModal({ open, onClose }: CreateRCAModalProps) {
     resolution: immediateResolution.trim().length > 0,
     takeaways: !!(wentWell.trim() || couldBeBetter.trim() || gotLucky.trim()),
     actions: Object.values(actions).some((rows) =>
-      rows.some((r) => r.action.trim() || r.owner.trim()),
+      rows.some((r) => r.action.trim() || r.owner),
     ),
     timeline: timeline.some((r) => r.time.trim() || r.event.trim()),
   };
@@ -946,7 +958,7 @@ function ActionItemTable({
               type="text"
               value={row.action}
               onChange={(e) => onUpdate(idx, { action: e.target.value })}
-              placeholder="short description / Argus link"
+              placeholder="short description / tracker link"
               className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-300 text-sm soft-focus focus:outline-none focus:border-blue-400"
             />
             <ActionStatusDropdown
@@ -954,13 +966,15 @@ function ActionItemTable({
               onChange={(s) => onUpdate(idx, { status: s })}
             />
 
-            <input
-              type="text"
-              value={row.owner}
-              onChange={(e) => onUpdate(idx, { owner: e.target.value })}
-              placeholder="name / @mention / email"
-              className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-300 text-sm soft-focus focus:outline-none focus:border-blue-400"
-            />
+            <div className="flex-1 min-w-0">
+              <UserAutocomplete
+                value={row.owner ? [row.owner] : []}
+                onChange={(arr) => onUpdate(idx, { owner: arr[0] ?? null })}
+                max={1}
+                single
+                placeholder="Pick owner"
+              />
+            </div>
             <button
               type="button"
               onClick={() => onRemove(idx)}
@@ -983,7 +997,7 @@ function ActionItemTable({
         </button>
       </div>
       <p className="text-[11px] text-slate-400 italic mt-1">
-        Tip: file each item as an Argus issue and paste the link in the action column.
+        Tip: file each item in your tracker (Jira / Linear / GitHub) and paste the link in the action column.
       </p>
     </div>
   );

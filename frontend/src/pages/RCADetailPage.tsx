@@ -22,26 +22,33 @@ import {
   regenerateSummary,
   updateRCA,
 } from '../api/client';
-import type { RCA, RCAHistoryEntry, RCASeverity, RCAStatus, User } from '../api/types';
+import type { RCA, RCASeverity, RCAStatus, User } from '../api/types';
 import type { UpdateRCAPatch } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import StatusStepper from '../components/StatusStepper';
-import SeverityIcon from '../components/SeverityIcon';
 import SeverityPicker from '../components/SeverityPicker';
 import TagInput from '../components/TagInput';
-import Avatar, { AvatarStack } from '../components/Avatar';
+import Avatar from '../components/Avatar';
 import UserAutocomplete from '../components/UserAutocomplete';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Dropdown, { DropdownItem } from '../components/Dropdown';
+import PillRow from '../components/PillRow';
+import BlamelessBanner from '../components/BlamelessBanner';
+import ImpactMetrics from '../components/ImpactMetrics';
+import RCATimeline from '../components/RCATimeline';
+import FiveWhysCallout from '../components/FiveWhysCallout';
+import ActionItemsTable from '../components/ActionItemsTable';
+import LessonsPanels from '../components/LessonsPanels';
+import RightRail from '../components/RightRail';
 import { useToast, getErrorMessage } from '../components/Toaster';
 import {
   formatDate,
-  formatDuration,
   fromDatetimeLocal,
   statusLabels,
   timeAgo,
   toDatetimeLocal,
 } from '../utils/format';
+import { parseRCABody } from '../utils/parseRCABody';
 
 const TS_FIELDS = [
   { key: 'incident_started_at', label: 'Started' },
@@ -50,7 +57,6 @@ const TS_FIELDS = [
   { key: 'incident_resolved_at', label: 'Resolved' },
 ] as const;
 
-// Display fallback for users we don't have a DB row for.
 function displayCreator(rca: RCA): { primary: string; secondary?: string } {
   const local = rca.creator_email.split('@')[0] || rca.creator_email;
   if (!rca.creator_name || rca.creator_name === rca.creator_email) {
@@ -65,9 +71,8 @@ interface InteractiveMarkdownProps {
   canEdit?: boolean;
 }
 
-// Parse the markdown body, render checkboxes as real <input type="checkbox"> that toggle [ ]/[x].
+// Render markdown with toggleable `- [ ]` checkboxes that PATCH the body.
 function InteractiveMarkdown({ body, onChangeChecklist, canEdit }: InteractiveMarkdownProps) {
-  // Build a flat list of checklist line indices so each <li> can claim its own.
   const checklistLines = useMemo(() => {
     const lines = body.split('\n');
     const refs: { lineIdx: number; checked: boolean; text: string }[] = [];
@@ -80,9 +85,7 @@ function InteractiveMarkdown({ body, onChangeChecklist, canEdit }: InteractiveMa
     return refs;
   }, [body]);
 
-  // We assign a sequential checklist index to each rendered checkbox in DOM order.
   const counter = useRef(0);
-  // Reset counter every render (a render = one parse).
   counter.current = 0;
 
   const toggleAt = (idx: number) => {
@@ -105,7 +108,6 @@ function InteractiveMarkdown({ body, onChangeChecklist, canEdit }: InteractiveMa
         components={{
           li: (props: ComponentPropsWithoutRef<'li'> & { checked?: boolean | null }) => {
             const { checked, children, className, ...rest } = props;
-            // remark-gfm flags task list items via `checked` prop on <li>.
             if (typeof checked === 'boolean') {
               const myIdx = counter.current++;
               return (
@@ -146,32 +148,20 @@ function InteractiveMarkdown({ body, onChangeChecklist, canEdit }: InteractiveMa
   );
 }
 
-interface SidebarCardProps {
-  label: string;
-  children: React.ReactNode;
-  action?: React.ReactNode;
-}
-
-function SidebarCard({ label, children, action }: SidebarCardProps) {
+function SectionHeading({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/60 p-4">
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-[10px] uppercase tracking-[0.08em] text-slate-400 font-semibold">
-          {label}
-        </h4>
-        {action}
-      </div>
+    <h2 className="text-[16px] font-medium text-slate-900 mb-3 mt-1 flex items-baseline gap-2">
       {children}
-    </div>
+      {hint && <span className="text-[12px] font-normal text-slate-500">{hint}</span>}
+    </h2>
   );
 }
 
-function TimingChip({ label, value }: { label: string; value: string }) {
+function ProseSection({ markdown }: { markdown: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 bg-slate-100 rounded-md px-2 py-0.5 text-[11px] text-slate-600">
-      <span className="font-medium text-slate-700">{label}</span>
-      <span className="tabular-nums text-slate-500">{value}</span>
-    </span>
+    <div className="prose-rca prose-rca-compact max-w-[68ch]">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+    </div>
   );
 }
 
@@ -198,6 +188,7 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
   const [assigneesDraft, setAssigneesDraft] = useState<User[]>(rca.assignees);
 
   const [showDelete, setShowDelete] = useState(false);
+  const [showMeta, setShowMeta] = useState(false);
 
   const [servicesDraft, setServicesDraft] = useState<string[]>(rca.services_affected);
   const [tsDraft, setTsDraft] = useState({
@@ -311,14 +302,12 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
     patch.mutate({ severity: next });
   };
 
-  // Toggling a checkbox from the rendered markdown PATCHes the body.
   const onChecklistToggle = (nextBody: string) => {
     if (!editable) return;
     queryClient.setQueryData(['rca', rca.id], { ...rca, body: nextBody });
     patch.mutate({ body: nextBody });
   };
 
-  // Debounced patch helpers for free-text / array / timestamp edits.
   const servicesTimer = useRef<number | null>(null);
   const onServicesChange = (next: string[]) => {
     setServicesDraft(next);
@@ -345,25 +334,34 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
     queryFn: () => fetchRCAHistory(rca.id),
   });
 
-  const ttd =
-    rca.incident_started_at && rca.incident_detected_at
-      ? formatDuration(rca.incident_started_at, rca.incident_detected_at)
-      : null;
-  const ttRespond =
-    rca.incident_detected_at && rca.incident_mitigated_at
-      ? formatDuration(rca.incident_detected_at, rca.incident_mitigated_at)
-      : null;
-  const ttResolve =
-    rca.incident_started_at && rca.incident_resolved_at
-      ? formatDuration(rca.incident_started_at, rca.incident_resolved_at)
-      : null;
-
-  const showDurations = ttd || ttRespond || ttResolve;
   const showSummaryCard = rca.status === 'rca_done' || rca.status === 'closed';
   const summaryGenerating =
     showSummaryCard && rca.ai_summary == null && (rca.status === 'closed' || rca.status === 'rca_done');
 
   const creator = displayCreator(rca);
+  const parsed = useMemo(() => parseRCABody(rca.body), [rca.body]);
+
+  // The subtitle one-liner: services + environment, falling back gracefully.
+  const subtitleParts: string[] = [];
+  if (rca.services_affected.length > 0) subtitleParts.push(rca.services_affected.slice(0, 3).join(', '));
+  if (rca.environment) subtitleParts.push(rca.environment);
+  const subtitle = subtitleParts.join(' · ');
+
+  const hasStructured =
+    !!parsed.tldr ||
+    !!parsed.summary ||
+    !!parsed.impact ||
+    !!parsed.consequence ||
+    !!parsed.fiveWhys ||
+    !!parsed.rootCauseProse ||
+    !!parsed.immediateResolution ||
+    !!parsed.wentWell ||
+    !!parsed.couldBeBetter ||
+    !!parsed.gotLucky ||
+    parsed.actionItems.length > 0 ||
+    parsed.timeline.length > 0;
+
+  const showLessons = !!parsed.wentWell || !!parsed.couldBeBetter || !!parsed.gotLucky;
 
   return (
     <div className="px-5 md:px-8 py-6 max-w-[1280px] mx-auto">
@@ -371,7 +369,6 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
       <div className="flex items-center justify-between gap-3 mb-4">
         <button
           onClick={() => {
-            // If we have history depth, go back; else fall back to the list.
             if (window.history.length > 1) navigate(-1);
             else navigate('/');
           }}
@@ -382,6 +379,19 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
         </button>
 
         <div className="flex items-center gap-2">
+          {editable && (
+            <button
+              type="button"
+              onClick={() => {
+                setBodyDraft(rca.body);
+                setBodyEditing(true);
+              }}
+              className="inline-flex items-center gap-1.5 text-[12.5px] text-slate-600 hover:text-slate-900 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-colors active:scale-[0.97]"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Edit body
+            </button>
+          )}
           {(deletable || isAdmin) && (
             <Dropdown
               align="right"
@@ -433,8 +443,8 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
         </div>
       </div>
 
-      {/* Title + meta */}
-      <div className="mb-5">
+      {/* Title */}
+      <div className="mb-1">
         {titleEditing ? (
           <input
             value={titleDraft}
@@ -450,13 +460,13 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
                 setTitleEditing(false);
               }
             }}
-            className="w-full text-[26px] leading-tight font-bold text-slate-900 tracking-tight bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 soft-focus focus:outline-none focus:border-blue-400"
+            className="w-full text-[22px] leading-tight font-medium text-slate-900 tracking-tight bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 soft-focus focus:outline-none focus:border-blue-400"
           />
         ) : (
           <div className="group flex items-start gap-2 min-w-0">
             <h1
               onClick={() => editable && setTitleEditing(true)}
-              className={`text-[26px] leading-tight font-bold text-slate-900 tracking-tight flex-1 min-w-0 ${
+              className={`text-[22px] leading-tight font-medium text-slate-900 tracking-tight flex-1 min-w-0 ${
                 editable ? 'cursor-text hover:text-slate-700 transition-colors' : ''
               }`}
               title={editable ? 'Click to edit' : rca.title}
@@ -467,7 +477,7 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
               <button
                 type="button"
                 onClick={() => setTitleEditing(true)}
-                className="shrink-0 opacity-0 group-hover:opacity-100 mt-2 p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
+                className="shrink-0 opacity-0 group-hover:opacity-100 mt-1.5 p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
                 aria-label="Edit title"
               >
                 <Pencil className="w-3.5 h-3.5" />
@@ -475,99 +485,144 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
             )}
           </div>
         )}
-
-        <div className="mt-2 flex items-center gap-2 text-[13px] text-slate-500">
-          <Avatar name={creator.primary} size="xs" />
-          <span>
-            by <span className="text-slate-700 font-medium">{creator.primary}</span>
-            {creator.secondary && (
-              <span className="text-slate-400"> ({creator.secondary})</span>
-            )}
-          </span>
-          <span className="text-slate-300">·</span>
-          <span title={formatDate(rca.created_at)}>{timeAgo(rca.created_at)}</span>
-          {rca.closed_at && (
-            <>
-              <span className="text-slate-300">·</span>
-              <span title={formatDate(rca.closed_at)}>closed {timeAgo(rca.closed_at)}</span>
-            </>
-          )}
-        </div>
       </div>
 
-      {/* Status stepper */}
-      <div className="bg-white rounded-2xl border border-slate-200/60 p-3 mb-5">
-        <StatusStepper
-          value={rca.status}
-          onChange={changeStatus}
-          canEdit={editable}
-          pending={patch.isPending}
-        />
+      {/* Subtitle (services + env) */}
+      {subtitle && (
+        <p className="text-[13px] text-slate-500 mb-3">{subtitle}</p>
+      )}
+
+      {/* Pill row */}
+      <PillRow rca={rca} />
+
+      {/* Blameless banner */}
+      <BlamelessBanner />
+
+      {/* Author + creation byline (kept compact, since the right rail also shows author) */}
+      <div className="mb-5 flex items-center gap-2 text-[12.5px] text-slate-500">
+        <Avatar name={creator.primary} size="xs" />
+        <span>
+          by <span className="text-slate-700 font-medium">{creator.primary}</span>
+          {creator.secondary && <span className="text-slate-400"> ({creator.secondary})</span>}
+        </span>
+        <span className="text-slate-300">·</span>
+        <span title={formatDate(rca.created_at)}>{timeAgo(rca.created_at)}</span>
+        {rca.closed_at && (
+          <>
+            <span className="text-slate-300">·</span>
+            <span title={formatDate(rca.closed_at)}>closed {timeAgo(rca.closed_at)}</span>
+          </>
+        )}
       </div>
 
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-5">
-        {/* LEFT — Body + AI summary + History */}
-        <div className="min-w-0 space-y-5">
-          <section className="bg-white rounded-2xl border border-slate-200/60 p-6">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[10px] uppercase tracking-[0.08em] text-slate-400 font-semibold">
-                Description
-              </h3>
-              {editable && !bodyEditing && (
-                <button
-                  onClick={() => {
-                    setBodyDraft(rca.body);
-                    setBodyEditing(true);
-                  }}
-                  className="text-[12px] text-blue-600 hover:text-blue-700 font-medium inline-flex items-center gap-1 transition-colors"
-                >
-                  <Pencil className="w-3 h-3" />
-                  Edit
-                </button>
-              )}
-            </div>
-            {bodyEditing ? (
-              <div>
-                <textarea
-                  value={bodyDraft}
-                  onChange={(e) => setBodyDraft(e.target.value)}
-                  rows={16}
-                  placeholder="Markdown supported"
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm soft-focus focus:outline-none focus:border-blue-400 font-mono leading-relaxed"
-                  autoFocus
-                />
-                <div className="flex justify-end gap-2 mt-2">
-                  <button
-                    onClick={() => {
-                      setBodyDraft(rca.body);
-                      setBodyEditing(false);
-                    }}
-                    className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-150 active:scale-[0.97]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={saveBody}
-                    className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-150 active:scale-[0.97]"
-                  >
-                    Save
-                  </button>
-                </div>
+      {/* 2-column grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-6">
+        {/* MAIN */}
+        <div className="min-w-0 space-y-7">
+          {/* Status stepper */}
+          <div>
+            <StatusStepper
+              value={rca.status}
+              onChange={changeStatus}
+              canEdit={editable}
+              pending={patch.isPending}
+            />
+          </div>
+
+          {/* Impact metrics */}
+          <section>
+            <SectionHeading>Impact</SectionHeading>
+            <ImpactMetrics rca={rca} consequence={parsed.consequence ?? parsed.impact} />
+            {(parsed.impact || parsed.consequence) && (
+              <div className="mt-4 space-y-3">
+                {parsed.impact && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-slate-500 font-semibold mb-1.5">
+                      User-facing impact
+                    </p>
+                    <ProseSection markdown={parsed.impact} />
+                  </div>
+                )}
+                {parsed.consequence && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-slate-500 font-semibold mb-1.5">
+                      Business consequence
+                    </p>
+                    <ProseSection markdown={parsed.consequence} />
+                  </div>
+                )}
               </div>
-            ) : rca.body.trim() ? (
-              <div className="max-w-[68ch]">
-                <InteractiveMarkdown
-                  body={rca.body}
-                  onChangeChecklist={onChecklistToggle}
-                  canEdit={editable}
-                />
-              </div>
-            ) : (
-              <p className="text-[13px] text-slate-400 italic">No description yet.</p>
             )}
           </section>
 
+          {/* TL;DR */}
+          {parsed.tldr && (
+            <section>
+              <SectionHeading>TL;DR</SectionHeading>
+              <ProseSection markdown={parsed.tldr} />
+            </section>
+          )}
+
+          {/* Summary (if separate from TL;DR) */}
+          {parsed.summary && (
+            <section>
+              <SectionHeading>Summary</SectionHeading>
+              <ProseSection markdown={parsed.summary} />
+            </section>
+          )}
+
+          {/* Timeline */}
+          {(parsed.timeline.length > 0 || (history && history.length > 0)) && (
+            <section>
+              <SectionHeading hint={parsed.timeline.length > 0 ? 'from RCA body + activity' : 'from activity log'}>
+                Timeline
+              </SectionHeading>
+              <RCATimeline history={history ?? []} bodyTimeline={parsed.timeline} />
+            </section>
+          )}
+
+          {/* Root cause */}
+          {(parsed.rootCauseProse || parsed.fiveWhys) && (
+            <section>
+              <SectionHeading>Root cause</SectionHeading>
+              {parsed.rootCauseProse && (
+                <div className="mb-4">
+                  <ProseSection markdown={parsed.rootCauseProse} />
+                </div>
+              )}
+              {parsed.fiveWhys && <FiveWhysCallout markdown={parsed.fiveWhys} />}
+            </section>
+          )}
+
+          {/* Immediate resolution */}
+          {parsed.immediateResolution && (
+            <section>
+              <SectionHeading>Immediate resolution</SectionHeading>
+              <ProseSection markdown={parsed.immediateResolution} />
+            </section>
+          )}
+
+          {/* Action items */}
+          {parsed.actionItems.length > 0 && (
+            <section>
+              <SectionHeading>Action items</SectionHeading>
+              <ActionItemsTable groups={parsed.actionItems} />
+            </section>
+          )}
+
+          {/* Lessons */}
+          {showLessons && (
+            <section>
+              <SectionHeading>What we learned</SectionHeading>
+              <LessonsPanels
+                wentWell={parsed.wentWell}
+                couldBeBetter={parsed.couldBeBetter}
+                gotLucky={parsed.gotLucky}
+              />
+            </section>
+          )}
+
+          {/* AI summary card */}
           {showSummaryCard && (
             <section className="relative rounded-2xl p-[1px] bg-gradient-to-br from-violet-300 via-blue-300 to-violet-300 animate-rca-reveal">
               <div className="bg-white rounded-[15px] p-5">
@@ -624,166 +679,161 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
             </section>
           )}
 
-          <section className="bg-white rounded-2xl border border-slate-200/60 p-6">
-            <h3 className="text-[10px] uppercase tracking-[0.08em] text-slate-400 font-semibold mb-4">
-              History
-            </h3>
-            {!history || history.length === 0 ? (
-              <p className="text-[13px] text-slate-400 italic">No activity yet.</p>
-            ) : (
-              <ol className="relative space-y-3 pl-5">
-                <span
-                  className="absolute left-2 top-1.5 bottom-1.5 w-px bg-slate-200"
-                  aria-hidden
-                />
-                {history.map((h) => (
-                  <li key={h.id} className="relative">
-                    <span
-                      className="absolute -left-[14px] top-2 w-2 h-2 rounded-full bg-slate-300 ring-2 ring-white"
-                      aria-hidden
-                    />
-                    <div className="flex items-start gap-2">
-                      <Avatar name={h.actor_email} size="xs" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[13px] text-slate-700">
-                          <span className="font-medium text-slate-900">
-                            {h.actor_email.split('@')[0]}
-                          </span>{' '}
-                          <span className="text-slate-500">{describeAction(h)}</span>
-                        </p>
-                        <p
-                          className="text-[11.5px] text-slate-400 tabular-nums"
-                          title={formatDate(h.at)}
-                        >
-                          {timeAgo(h.at)}
-                        </p>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-        </div>
-
-        {/* RIGHT — Bento sidebar */}
-        <aside className="space-y-3">
-          <SidebarCard label="Severity">
-            {editable ? (
-              <SeverityPicker value={rca.severity} onChange={changeSeverity} />
-            ) : (
-              <SeverityIcon severity={rca.severity} size={18} withLabel />
-            )}
-          </SidebarCard>
-
-          <SidebarCard label="Services">
-            {editable ? (
-              <TagInput
-                value={servicesDraft}
-                onChange={onServicesChange}
-                placeholder="Add and Enter…"
+          {/* Body editor (full raw) */}
+          {bodyEditing && (
+            <section className="bg-white rounded-2xl ring-1 ring-slate-200/60 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[10px] uppercase tracking-[0.08em] text-slate-500 font-semibold">
+                  Edit body (markdown)
+                </h3>
+              </div>
+              <textarea
+                value={bodyDraft}
+                onChange={(e) => setBodyDraft(e.target.value)}
+                rows={20}
+                placeholder="Markdown supported"
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm soft-focus focus:outline-none focus:border-blue-400 font-mono leading-relaxed"
+                autoFocus
               />
-            ) : rca.services_affected.length === 0 ? (
-              <span className="text-[12px] text-slate-400 italic">—</span>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {rca.services_affected.map((s) => (
-                  <span
-                    key={s}
-                    className="bg-slate-100 text-slate-700 rounded-full px-2 py-0.5 text-[11px] font-medium"
-                  >
-                    {s}
-                  </span>
-                ))}
-              </div>
-            )}
-          </SidebarCard>
-
-          <SidebarCard label="When did it happen">
-            <div className="space-y-2.5">
-              {TS_FIELDS.map((f) => (
-                <div key={f.key}>
-                  <label className="block text-[10.5px] font-medium text-slate-400 uppercase tracking-wide mb-1">
-                    {f.label}
-                  </label>
-                  {editable ? (
-                    <input
-                      type="datetime-local"
-                      value={tsDraft[f.key] || ''}
-                      onChange={(e) => onTsChange(f.key, e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-[12.5px] tabular-nums soft-focus focus:outline-none focus:border-blue-400"
-                    />
-                  ) : (
-                    <span className="text-[12.5px] text-slate-700 tabular-nums">
-                      {rca[f.key] ? (
-                        <span title={formatDate(rca[f.key]!)}>{formatDate(rca[f.key]!)}</span>
-                      ) : (
-                        <span className="text-slate-300 italic">—</span>
-                      )}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-            {showDurations && (
-              <div className="flex flex-wrap gap-1.5 mt-3">
-                {ttd && <TimingChip label="TTD" value={ttd} />}
-                {ttRespond && <TimingChip label="Respond" value={ttRespond} />}
-                {ttResolve && <TimingChip label="Resolve" value={ttResolve} />}
-              </div>
-            )}
-          </SidebarCard>
-
-          <SidebarCard
-            label="Assignees"
-            action={
-              editable && !assigneesEditing ? (
+              <div className="flex justify-end gap-2 mt-2">
                 <button
                   onClick={() => {
-                    setAssigneesDraft(rca.assignees);
-                    setAssigneesEditing(true);
+                    setBodyDraft(rca.body);
+                    setBodyEditing(false);
                   }}
-                  className="text-[11px] text-blue-600 hover:text-blue-700 font-medium inline-flex items-center gap-1"
+                  className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-150 active:scale-[0.97]"
                 >
-                  <Pencil className="w-3 h-3" />
-                  Edit
+                  Cancel
                 </button>
-              ) : null
-            }
-          >
-            {assigneesEditing ? (
-              <div>
-                <UserAutocomplete value={assigneesDraft} onChange={setAssigneesDraft} />
-                <div className="flex justify-end gap-2 mt-2">
+                <button
+                  onClick={saveBody}
+                  className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-150 active:scale-[0.97]"
+                >
+                  Save
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* Unstructured fallback — preserves user-authored sections we don't know how to render. */}
+          {!bodyEditing && parsed.unstructured && (
+            <section className="max-w-[68ch]">
+              <InteractiveMarkdown
+                body={parsed.unstructured}
+                onChangeChecklist={onChecklistToggle}
+                canEdit={editable}
+              />
+            </section>
+          )}
+
+          {!bodyEditing && !hasStructured && !parsed.unstructured && (
+            <section>
+              <p className="text-[13px] text-slate-400 italic">
+                No description yet.{' '}
+                {editable && (
                   <button
                     onClick={() => {
-                      setAssigneesDraft(rca.assignees);
-                      setAssigneesEditing(false);
+                      setBodyDraft(rca.body);
+                      setBodyEditing(true);
                     }}
-                    className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors active:scale-[0.97]"
+                    className="text-blue-600 hover:text-blue-700 not-italic font-medium"
                   >
-                    Cancel
+                    Add one →
                   </button>
-                  <button
-                    onClick={saveAssignees}
-                    className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors active:scale-[0.97]"
-                  >
-                    Save
-                  </button>
+                )}
+              </p>
+            </section>
+          )}
+
+          {/* Editable meta strip — kept below the structured content for power users */}
+          {editable && (
+            <section className="bg-slate-50/70 rounded-2xl ring-1 ring-slate-200/60 p-4">
+              <button
+                onClick={() => setShowMeta((v) => !v)}
+                className="w-full flex items-center justify-between text-[12px] font-semibold text-slate-600 hover:text-slate-900 uppercase tracking-[0.08em]"
+              >
+                <span>Edit incident metadata</span>
+                <span className="text-slate-400">{showMeta ? '−' : '+'}</span>
+              </button>
+              {showMeta && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10.5px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">
+                      Severity
+                    </label>
+                    <SeverityPicker value={rca.severity} onChange={changeSeverity} />
+                  </div>
+                  <div>
+                    <label className="block text-[10.5px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">
+                      Services
+                    </label>
+                    <TagInput
+                      value={servicesDraft}
+                      onChange={onServicesChange}
+                      placeholder="Add and Enter…"
+                    />
+                  </div>
+                  {TS_FIELDS.map((f) => (
+                    <div key={f.key}>
+                      <label className="block text-[10.5px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">
+                        {f.label}
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={tsDraft[f.key] || ''}
+                        onChange={(e) => onTsChange(f.key, e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-[12.5px] tabular-nums soft-focus focus:outline-none focus:border-blue-400 bg-white"
+                      />
+                    </div>
+                  ))}
+                  <div className="md:col-span-2">
+                    <label className="block text-[10.5px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">
+                      Assignees (IC + co-handlers)
+                    </label>
+                    {assigneesEditing ? (
+                      <div>
+                        <UserAutocomplete value={assigneesDraft} onChange={setAssigneesDraft} />
+                        <div className="flex justify-end gap-2 mt-2">
+                          <button
+                            onClick={() => {
+                              setAssigneesDraft(rca.assignees);
+                              setAssigneesEditing(false);
+                            }}
+                            className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors active:scale-[0.97]"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={saveAssignees}
+                            className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors active:scale-[0.97]"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setAssigneesDraft(rca.assignees);
+                          setAssigneesEditing(true);
+                        }}
+                        className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-[12.5px] text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        {rca.assignees.length === 0
+                          ? 'Add assignees'
+                          : `${rca.assignees.length} assignee${rca.assignees.length === 1 ? '' : 's'}`}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ) : rca.assignees.length === 0 ? (
-              <p className="text-[12px] text-slate-400 italic">Unassigned</p>
-            ) : (
-              <div className="flex items-center gap-2 flex-wrap">
-                <AvatarStack names={rca.assignees.map((a) => a.name)} max={5} size="sm" />
-                <div className="text-[12px] text-slate-600 truncate min-w-0">
-                  {rca.assignees.map((a) => a.name).join(' · ')}
-                </div>
-              </div>
-            )}
-          </SidebarCard>
-        </aside>
+              )}
+            </section>
+          )}
+        </div>
+
+        {/* RIGHT */}
+        <RightRail rca={rca} />
       </div>
 
       <ConfirmDialog
@@ -798,58 +848,6 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
       />
     </div>
   );
-}
-
-const FIELD_HUMAN: Record<string, string> = {
-  title: 'title',
-  body: 'description',
-  severity: 'severity',
-  environment: 'environment',
-  services_affected: 'services affected',
-  incident_started_at: 'incident start time',
-  incident_detected_at: 'incident detection time',
-  incident_mitigated_at: 'incident mitigation time',
-  incident_resolved_at: 'incident resolution time',
-};
-
-function humanizeStatus(value: string): string {
-  const key = value as RCAStatus;
-  return statusLabels[key] ?? value;
-}
-
-function describeAction(h: RCAHistoryEntry): string {
-  switch (h.action) {
-    case 'created':
-      return 'created this RCA';
-    case 'status_changed': {
-      const to = h.to_value ? humanizeStatus(h.to_value) : '';
-      return `changed status to ${to}`.trim();
-    }
-    case 'assigned':
-      return `assigned ${h.to_value?.split('@')[0] ?? ''}`.trim();
-    case 'unassigned':
-      return `unassigned ${(h.to_value ?? h.from_value ?? '').split('@')[0] ?? ''}`.trim();
-    case 'edited': {
-      const field = h.from_value ? FIELD_HUMAN[h.from_value] ?? h.from_value : 'the RCA';
-      if (h.from_value === 'severity' && h.to_value) {
-        return `changed severity to ${h.to_value.toUpperCase()}`;
-      }
-      if (h.from_value === 'environment' && h.to_value) {
-        return `set environment to ${h.to_value}`;
-      }
-      if (h.from_value === 'services_affected' && h.to_value) {
-        return `updated services to ${h.to_value}`;
-      }
-      if (h.from_value === 'title' && h.to_value) {
-        return `renamed to "${h.to_value}"`;
-      }
-      return `updated ${field}`;
-    }
-    case 'deleted':
-      return 'deleted the RCA';
-    default:
-      return h.action;
-  }
 }
 
 export default function RCADetailPage() {
@@ -884,7 +882,7 @@ export default function RCADetailPage() {
         <div className="skeleton h-7 w-2/3 mb-3" />
         <div className="skeleton h-3 w-40 mb-5" />
         <div className="skeleton h-12 rounded-2xl mb-5" />
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-6">
           <div className="space-y-3">
             <div className="skeleton h-4 w-full" />
             <div className="skeleton h-4 w-5/6" />
