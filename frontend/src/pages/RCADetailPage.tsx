@@ -198,10 +198,13 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
     incident_resolved_at: toDatetimeLocal(rca.incident_resolved_at),
   });
 
+  // Sync drafts back to the canonical RCA when it refetches — but only
+  // when the user is *not* mid-edit, so an in-flight focus refetch doesn't
+  // blow away a draft they're typing.
   useEffect(() => {
-    setTitleDraft(rca.title);
-    setBodyDraft(rca.body);
-    setAssigneesDraft(rca.assignees);
+    if (!titleEditing) setTitleDraft(rca.title);
+    if (!bodyEditing) setBodyDraft(rca.body);
+    if (!assigneesEditing) setAssigneesDraft(rca.assignees);
     setServicesDraft(rca.services_affected);
     setTsDraft({
       incident_started_at: toDatetimeLocal(rca.incident_started_at),
@@ -209,6 +212,9 @@ function RCADetailContent({ rca }: RCADetailContentProps) {
       incident_mitigated_at: toDatetimeLocal(rca.incident_mitigated_at),
       incident_resolved_at: toDatetimeLocal(rca.incident_resolved_at),
     });
+    // titleEditing/bodyEditing/assigneesEditing intentionally excluded — toggling
+    // those flags shouldn't re-pull from rca; the saveX handlers already commit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rca]);
 
   const prevSummaryAt = useRef<string | null>(rca.ai_summary_at);
