@@ -1,0 +1,49 @@
+# Local dev stack for the RCA COE Tracker.
+#
+# Most devs run uvicorn + `npm run dev` directly on the host and only need
+# Postgres in Docker — that's why the `app` service below is commented out.
+# Bring up just the db with:   docker compose up db
+#
+# Then in another shell:
+#   cd backend && DEV_FAKE_EMAIL=you@example.com uvicorn app.main:app --reload
+#   cd frontend && npm run dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: rca-coe-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rca
+      POSTGRES_PASSWORD: rca
+      POSTGRES_DB: rca_coe
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rca -d rca_coe"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Uncomment if you'd rather run the whole app stack in containers.
+  # app:
+  #   build: .
+  #   container_name: rca-coe-app
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   environment:
+  #     DATABASE_URL: postgresql+asyncpg://rca:rca@db:5432/rca_coe
+  #     DB_SCHEMA: rca_coe
+  #     DEV_FAKE_EMAIL: you@example.com
+  #     DEV_FAKE_NAME: Local Dev
+  #     ADMIN_EMAILS: you@example.com
+  #     APP_BASE_URL: http://localhost:8000
+  #     CORS_ORIGINS: http://localhost:5173
+  #   ports:
+  #     - "8000:8000"
+
+volumes:
+  pgdata:

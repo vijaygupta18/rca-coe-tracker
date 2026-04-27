@@ -1,0 +1,58 @@
+# --- Secrets / local config ---
+.env
+.env.local
+.env.*.local
+
+# Internal deployment notes with real secrets / URLs / registry / namespace.
+# The committed prodk8s/DEPLOY.md is the sanitized public runbook.
+DEPLOYMENT.md
+prodk8s/deployment.prod.yaml
+*.local.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
+build/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.yarn/
+
+# --- Frontend build output ---
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+backend/static/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Local Postgres data (if someone bind-mounts instead of using the named volume) ---
+pgdata/
+*.sql.bak
