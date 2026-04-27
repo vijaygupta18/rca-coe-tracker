@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -68,6 +68,96 @@ async def version():
         "ai_model": settings.ai_model,
         "ai_fast_model": settings.ai_fast_model,
     }
+
+
+_LOGGED_OUT_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="theme-color" content="#1D4ED8">
+  <title>Signed out · RCA Tracker</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      color: #0f172a;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 1px 0 rgba(15,23,42,0.04), 0 8px 24px -8px rgba(15,23,42,0.16), 0 18px 48px -12px rgba(15,23,42,0.12);
+      border: 1px solid rgba(226,232,240,0.7);
+      padding: 36px 32px;
+      max-width: 380px;
+      width: 100%;
+      text-align: center;
+      animation: fade-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .icon-wrap {
+      width: 56px; height: 56px;
+      margin: 0 auto 18px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #60A5FA, #1D4ED8);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 6px 16px -4px rgba(29,78,216,0.35);
+    }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+    p { font-size: 13.5px; color: #64748b; line-height: 1.55; margin: 0 0 22px; }
+    a.btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: #2563eb; color: #ffffff; text-decoration: none;
+      padding: 10px 20px; border-radius: 10px;
+      font-size: 14px; font-weight: 500;
+      transition: all 0.15s ease;
+      box-shadow: 0 1px 2px rgba(37,99,235,0.2);
+    }
+    a.btn:hover { background: #1d4ed8; transform: translateY(-1px); box-shadow: 0 4px 10px -2px rgba(37,99,235,0.35); }
+    a.btn:active { transform: scale(0.97); }
+    .meta { font-size: 11px; color: #94a3b8; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="icon-wrap">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+        <polyline points="16 17 21 12 16 7"/>
+        <line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+    </div>
+    <h1>You've been signed out</h1>
+    <p>Your session has been cleared. Click below to sign back in to RCA Tracker.</p>
+    <a class="btn" href="/">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+        <polyline points="10 17 15 12 10 7"/>
+        <line x1="15" y1="12" x2="3" y2="12"/>
+      </svg>
+      Log in again
+    </a>
+    <p class="meta">RCA Tracker</p>
+  </main>
+</body>
+</html>"""
+
+
+@app.get("/logged-out", response_class=HTMLResponse, include_in_schema=False)
+async def logged_out():
+    """Static signed-out landing page. Pomerium has a public route to this
+    path so an unauthenticated browser still gets a friendly UI after a
+    sign-out instead of bouncing on Pomerium's home page."""
+    return HTMLResponse(_LOGGED_OUT_HTML)
 
 
 @app.get("/api/_debug/headers")

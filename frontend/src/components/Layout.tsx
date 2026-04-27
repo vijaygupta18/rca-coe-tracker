@@ -401,7 +401,11 @@ function UserMenu() {
               // to its sign-out endpoint. After it clears the cookie it
               // bounces us back to "/", where the next request 401s and
               // Pomerium re-prompts SSO.
-              const redirectUri = encodeURIComponent(window.location.origin + '/');
+              // After Pomerium clears the session, land on /logged-out
+              // (a public Pomerium route) so the user sees a friendly
+              // page with a "Log in again" button instead of Pomerium's
+              // own /.pomerium/ landing.
+              const redirectUri = encodeURIComponent(window.location.origin + '/logged-out');
               window.location.href = `/.pomerium/sign_out?pomerium_redirect_uri=${redirectUri}`;
             }}
           >
