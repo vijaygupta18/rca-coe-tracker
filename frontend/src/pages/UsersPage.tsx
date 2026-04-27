@@ -267,11 +267,11 @@ export default function UsersPage() {
 
   return (
     <div className="px-5 md:px-8 py-6 max-w-[1200px] mx-auto">
-      <div className="flex items-start justify-between gap-4 mb-5">
-        <div className="min-w-0">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <UsersIcon className="w-5 h-5 text-slate-500" />
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Users</h1>
+            <UsersIcon className="w-5 h-5 text-slate-500 shrink-0" />
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">Users</h1>
           </div>
           <p className="text-[13px] text-slate-500 mt-1">
             Manage who can access the RCA tracker. Admins can promote, demote, or remove members.
@@ -279,24 +279,33 @@ export default function UsersPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => refetch()}
+            onClick={async () => {
+              const r = await refetch();
+              if (r.error) {
+                error('Refresh failed', getErrorMessage(r.error));
+              } else {
+                success('Users refreshed', `${r.data?.total ?? 0} users`);
+              }
+            }}
             disabled={isFetching}
             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 active:scale-[0.97] inline-flex items-center gap-1.5 disabled:opacity-50"
+            aria-label="Refresh user list"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </button>
           <button
             onClick={() => setShowAdd(true)}
             className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-3.5 py-2 text-sm font-medium transition-all duration-150 active:scale-[0.97] inline-flex items-center gap-1.5 shadow-sm shadow-blue-500/20"
           >
             <UserPlus className="w-4 h-4" />
-            Add user
+            <span className="hidden sm:inline">Add user</span>
+            <span className="sm:hidden">Add</span>
           </button>
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="relative w-full sm:w-[380px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           <input
@@ -323,7 +332,7 @@ export default function UsersPage() {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
-        <div className="grid grid-cols-[1fr_1.4fr_120px_80px_120px_44px] gap-4 px-4 py-2 bg-slate-50/60 border-b border-slate-200/60 text-[10.5px] uppercase tracking-[0.08em] text-slate-400 font-semibold">
+        <div className="hidden md:grid grid-cols-[1fr_1.4fr_120px_80px_120px_44px] gap-4 px-4 py-2 bg-slate-50/60 border-b border-slate-200/60 text-[10.5px] uppercase tracking-[0.08em] text-slate-400 font-semibold">
           <div>User</div>
           <div>Email</div>
           <div>Role</div>
@@ -368,26 +377,61 @@ export default function UsersPage() {
             <div
               key={u.email}
               style={{ animationDelay: `${Math.min(idx, 12) * 18}ms` }}
-              className="grid grid-cols-[1fr_1.4fr_120px_80px_120px_44px] items-center gap-4 px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50/70 transition-colors animate-stagger-in"
+              className="
+                px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50/70 transition-colors animate-stagger-in
+                grid gap-x-4 gap-y-2 items-center
+                grid-cols-[1fr_auto] md:grid-cols-[1fr_1.4fr_120px_80px_120px_44px]
+              "
             >
-              <div className="flex items-center gap-2.5 min-w-0">
+              {/* User cell — same on mobile + desktop */}
+              <div className="flex items-center gap-2.5 min-w-0 row-start-1 col-start-1">
                 <Avatar name={u.name || u.email} size="sm" />
                 <div className="min-w-0">
                   <p className="text-[13px] font-medium text-slate-900 truncate">
                     {u.name || u.email.split('@')[0]}
                   </p>
-                  <p className="text-[11px] text-slate-400 tabular-nums" title={formatDate(u.created_at)}>
+                  <p className="text-[11px] text-slate-400 tabular-nums truncate md:hidden" title={u.email}>
+                    {u.email}
+                  </p>
+                  <p className="hidden md:block text-[11px] text-slate-400 tabular-nums" title={formatDate(u.created_at)}>
                     Joined {timeAgo(u.created_at)}
                   </p>
                 </div>
               </div>
-              <div className="text-[12.5px] text-slate-600 truncate" title={u.email}>
+
+              {/* Action menu — top-right on mobile, last column on desktop */}
+              <div className="row-start-1 col-start-2 md:row-start-1 md:col-start-6 text-right shrink-0">
+                <RowMenu
+                  user={u}
+                  selfEmail={me?.email ?? ''}
+                  onPromote={() => promote.mutate(u.email)}
+                  onDemote={() => demote.mutate(u.email)}
+                  onRemove={() => setConfirmRemove(u)}
+                />
+              </div>
+
+              {/* Email — desktop column 2 only (already shown under name on mobile) */}
+              <div className="hidden md:block text-[12.5px] text-slate-600 truncate md:col-start-2" title={u.email}>
                 {u.email}
               </div>
-              <div className="shrink-0">
+
+              {/* Role + RCAs + Last seen — flow inline below on mobile, separate columns on desktop */}
+              <div className="row-start-2 col-span-2 md:row-start-1 md:col-start-3 md:col-span-1 flex items-center gap-2 md:gap-0 flex-wrap">
                 <RoleBadge user={u} />
+                <span className="md:hidden inline-flex items-center gap-1 text-[11px] text-slate-500">
+                  <span className="text-slate-300">·</span>
+                  {u.rca_count > 0 ? (
+                    <span>{u.rca_count} RCA{u.rca_count === 1 ? '' : 's'}</span>
+                  ) : (
+                    <span className="text-slate-400">0 RCAs</span>
+                  )}
+                  <span className="text-slate-300">·</span>
+                  <span title={formatDate(u.last_seen_at)}>last seen {timeAgo(u.last_seen_at)}</span>
+                </span>
               </div>
-              <div className="shrink-0 text-right text-[12.5px] text-slate-700 tabular-nums">
+
+              {/* Desktop-only RCAs and Last seen columns */}
+              <div className="hidden md:block shrink-0 text-right text-[12.5px] text-slate-700 tabular-nums md:col-start-4">
                 {u.rca_count > 0 ? (
                   <span className="inline-flex items-center justify-center min-w-[28px] px-1.5 py-0.5 rounded-md bg-slate-100 font-medium">
                     {u.rca_count}
@@ -396,17 +440,8 @@ export default function UsersPage() {
                   <span className="text-slate-300">0</span>
                 )}
               </div>
-              <div className="text-[12px] text-slate-500 tabular-nums" title={formatDate(u.last_seen_at)}>
+              <div className="hidden md:block text-[12px] text-slate-500 tabular-nums md:col-start-5" title={formatDate(u.last_seen_at)}>
                 {timeAgo(u.last_seen_at)}
-              </div>
-              <div className="text-right">
-                <RowMenu
-                  user={u}
-                  selfEmail={me?.email ?? ''}
-                  onPromote={() => promote.mutate(u.email)}
-                  onDemote={() => demote.mutate(u.email)}
-                  onRemove={() => setConfirmRemove(u)}
-                />
               </div>
             </div>
           ))
