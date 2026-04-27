@@ -150,10 +150,12 @@ async def get_current_user(
 
     user_row = (await db.execute(select(User).where(User.email == email))).scalar_one()
 
-    # First-login enrichment: if we don't have a Slack id for this user yet,
-    # async-resolve their real name + slack_id from Slack. Fire-and-forget
-    # so the request isn't blocked on the Slack round-trip.
-    if not user_row.slack_id:
+    # Auto-enrich whenever we don't have a Slack id yet, OR the stored name
+    # looks like the email-prefix fallback (i.e. Pomerium's JWT didn't carry
+    # a `name` claim and we ended up using the local part). Fire-and-forget.
+    local = email.split("@", 1)[0]
+    name_is_fallback = (not user_row.name) or user_row.name == local or user_row.name == email
+    if not user_row.slack_id or name_is_fallback:
         user_enrich.maybe_enrich(email)
 
     return UserCtx(email=email, name=name, is_admin=bool(user_row.is_admin))
