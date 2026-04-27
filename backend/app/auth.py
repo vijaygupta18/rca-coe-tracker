@@ -43,10 +43,46 @@ def _decode_jwt_claims(token: str) -> dict | None:
         return None
 
 
+def _looks_like_real_name(value: str | None) -> bool:
+    """A real human name has at least one non-digit, non-`@` character. The
+    `User-Name` header in some Pomerium versions carries the IdP subject id
+    (a long numeric string) rather than a display name — reject those."""
+    if not value:
+        return False
+    s = value.strip()
+    if not s or "@" in s:
+        return False
+    return any(not ch.isdigit() for ch in s)
+
+
 def _read_pomerium_identity(request: Request) -> tuple[str, str] | None:
     headers = request.headers
 
-    # 1. Direct claim headers (older Pomerium, oauth2-proxy, custom proxies).
+    # 1. Prefer the signed JWT assertion when present — it carries the full
+    #    claim set (email, name, given_name, family_name, hd, …) and can't be
+    #    confused with a stand-alone "X-Pomerium-User-Name" header that some
+    #    versions populate with the IdP subject id (a numeric sub).
+    jwt = headers.get("x-pomerium-jwt-assertion") or headers.get("x-pomerium-assertion")
+    if jwt:
+        claims = _decode_jwt_claims(jwt) or {}
+        email = (
+            claims.get("email")
+            or claims.get("preferred_username")
+            or claims.get("upn")
+        )
+        if isinstance(email, str) and "@" in email:
+            given = claims.get("given_name") or ""
+            family = claims.get("family_name") or ""
+            full = f"{given} {family}".strip()
+            name_candidate = (
+                claims.get("name")
+                or (full if _looks_like_real_name(full) else None)
+                or claims.get("given_name")
+                or email.split("@")[0]
+            )
+            return email.lower(), name_candidate
+
+    # 2. Legacy / oauth2-proxy-style claim headers.
     email = (
         headers.get("x-pomerium-claim-email")
         or headers.get("x-pomerium-user-email")
@@ -54,34 +90,17 @@ def _read_pomerium_identity(request: Request) -> tuple[str, str] | None:
         or headers.get("x-auth-request-email")
     )
     if email:
-        name = (
-            headers.get("x-pomerium-claim-name")
-            or headers.get("x-pomerium-user-name")
-            or headers.get("x-forwarded-user")
-            or headers.get("x-auth-request-user")
-            or email.split("@")[0]
-        )
+        # Build the name candidate list, then pick the first that actually
+        # looks like a name (rejecting numeric subject ids).
+        candidates = [
+            headers.get("x-pomerium-claim-name"),
+            headers.get("x-pomerium-claim-given-name"),
+            headers.get("x-forwarded-user"),
+            headers.get("x-auth-request-user"),
+            headers.get("x-pomerium-user-name"),
+        ]
+        name = next((c for c in candidates if _looks_like_real_name(c)), email.split("@")[0])
         return email.lower(), name
-
-    # 2. Newer Pomerium: a single signed JWT assertion carries every claim.
-    jwt = headers.get("x-pomerium-jwt-assertion") or headers.get("x-pomerium-assertion")
-    if jwt:
-        claims = _decode_jwt_claims(jwt) or {}
-        # Look for email in the standard places. NEVER fall back to sub — that's
-        # a numeric IdP user id, not an email.
-        email = (
-            claims.get("email")
-            or claims.get("preferred_username")
-            or claims.get("upn")
-        )
-        if email and "@" in email:
-            name = (
-                claims.get("name")
-                or claims.get("given_name")
-                or claims.get("user")
-                or email.split("@")[0]
-            )
-            return email.lower(), name
 
     return None
 
