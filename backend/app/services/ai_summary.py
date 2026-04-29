@@ -1,7 +1,12 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# IST = UTC+5:30. The whole org operates in IST so the AI summary's
+# Timeline + Metadata sections render times in IST to match the human-
+# authored Timeline section in the body.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +62,7 @@ One or two short sentences. What happened and the impact.
 Customer/business impact. Quantify when possible (riders, drivers, bookings, percent of traffic, duration). Reference severity and environment.
 
 ## Timeline
-Bulleted, chronological. Each line: short ISO time then a brief event. Pull from the BODY where it has timestamps; otherwise from STATUS HISTORY.
+Bulleted, chronological. Each line: time then a brief event. Use **IST** times in the format `HH:MM IST` (e.g. `12:00 IST`); never UTC, never raw ISO with `+00:00`. Pull from the BODY where it has timestamps; otherwise from STATUS HISTORY (those are already supplied in IST below).
 
 ## Root Cause
 One or two short paragraphs or a small bullet list. Underlying cause plus contributing factors. Stay grounded in the body text.
@@ -75,7 +80,8 @@ Short bullet list. Skip if nothing.
 Pull from the body. One bullet per item. If owner or priority is mentioned, include them in parentheses. Preserve any tracker issue links (Jira / Linear / GitHub Issues / etc.) verbatim.
 
 ## Metadata
-A compact bullet list with these labels (only include rows that have a value):
+A compact bullet list with these labels (only include rows that have a value).
+Render every timestamp in IST in the format `YYYY-MM-DD HH:MM IST` (e.g. `2026-04-29 12:00 IST`). Never use UTC.
 - Severity
 - Environment
 - Services affected
@@ -142,9 +148,11 @@ def _format_duration(start: datetime | None, end: datetime | None) -> str:
 
 
 def _fmt_ts(ts: datetime | None) -> str:
+    """Render a timestamp for the LLM in IST. The model is told to emit
+    `HH:MM IST` / `YYYY-MM-DD HH:MM IST` in its output."""
     if not ts:
         return "not recorded"
-    return ts.astimezone(timezone.utc).isoformat()
+    return ts.astimezone(IST).strftime("%Y-%m-%d %H:%M IST")
 
 
 async def _build_prompt(db: AsyncSession, rca: RCA) -> str:
@@ -154,7 +162,7 @@ async def _build_prompt(db: AsyncSession, rca: RCA) -> str:
         )
     ).scalars().all()
     history_lines = [
-        f"- {h.at.isoformat()} - {h.actor_email} - {h.action}"
+        f"- {h.at.astimezone(IST).strftime('%Y-%m-%d %H:%M IST')} - {h.actor_email} - {h.action}"
         + (f" ({h.from_value} -> {h.to_value})" if h.from_value or h.to_value else "")
         for h in history_rows
     ]
@@ -166,8 +174,8 @@ async def _build_prompt(db: AsyncSession, rca: RCA) -> str:
         environment=(rca.environment or "not set"),
         services=", ".join(rca.services_affected or []) or "not set",
         creator=rca.creator_email,
-        created_at=rca.created_at.isoformat(),
-        closed_at=closed_at.isoformat(),
+        created_at=rca.created_at.astimezone(IST).strftime("%Y-%m-%d %H:%M IST"),
+        closed_at=closed_at.astimezone(IST).strftime("%Y-%m-%d %H:%M IST"),
         open_duration=_format_duration(rca.created_at, closed_at),
         incident_started_at=_fmt_ts(rca.incident_started_at),
         incident_detected_at=_fmt_ts(rca.incident_detected_at),
